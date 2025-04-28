@@ -1,6 +1,7 @@
 import 'package:driver_app/customer_detail_screen.dart';
 import 'package:driver_app/login.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class DriverAssignedCustomersScreen extends StatefulWidget {
@@ -74,7 +75,11 @@ class _DriverAssignedCustomersScreenState
     });
   }
 
-  void _logout() {
+  void _logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('driverId');
+    await prefs.remove('driverName');
+    await prefs.remove('areaName');
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (_) => const DriverLoginScreen()),

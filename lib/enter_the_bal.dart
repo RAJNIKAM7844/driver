@@ -24,11 +24,10 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
   @override
   void initState() {
     super.initState();
-    _loadBalance(); // Fetch initial balance
-    _setupRealtimeSubscription(); // Set up real-time updates
+    _loadBalance();
+    _setupRealtimeSubscription();
   }
 
-  // Load the current balance as the sum of transaction credits
   Future<void> _loadBalance() async {
     try {
       final transactionsResponse = await _supabase
@@ -51,10 +50,12 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
       setState(() {
         balance = 0.0;
       });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load balance: $e')),
+      );
     }
   }
 
-  // Set up real-time subscription for transaction updates
   void _setupRealtimeSubscription() {
     _supabase
         .channel('transactions')
@@ -76,7 +77,6 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
         .subscribe();
   }
 
-  // Update the balance and store in Supabase
   void updateBalance() async {
     final traysText = traysController.text.trim();
     if (traysText.isEmpty) {
@@ -99,23 +99,28 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
     });
 
     try {
-      final currentUserId = _supabase.auth.currentUser?.id;
-      print(
-          'Authenticated user ID: $currentUserId, Updating customerId: ${widget.customerId}');
-
-      // Fetch the latest egg price from eggrates table
+      // Fetch the latest egg price from eggs_rates table
       final eggRateResponse = await _supabase
-          .from('eggrates')
+          .from('egg_rates')
           .select('rate')
           .order('updated_at', ascending: false)
           .limit(1);
 
-      if (eggRateResponse.isEmpty) {
-        throw Exception('No egg rate found in eggrates table');
-      }
+      print('Egg rate response: $eggRateResponse');
 
-      final eggPrice = eggRateResponse[0]['rate'].toDouble();
-      print('Fetched egg price: $eggPrice per egg');
+      double eggPrice;
+      if (eggRateResponse.isEmpty) {
+        // Fallback to default rate
+        eggPrice = 10.0; // Adjust default rate as needed
+        print('No egg rate found, using default rate: $eggPrice');
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content: Text('No egg rate found, using default rate')),
+        );
+      } else {
+        eggPrice = eggRateResponse[0]['rate'].toDouble();
+        print('Fetched egg price: $eggPrice per egg');
+      }
 
       // Calculate the cost: (egg_price * 30) * trays
       final cost = (eggPrice * 30) * trays;

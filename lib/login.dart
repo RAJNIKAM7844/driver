@@ -1,5 +1,6 @@
 import 'package:driver_app/drivers_home.dart';
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class DriverLoginScreen extends StatefulWidget {
@@ -20,7 +21,6 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
     final username = usernameController.text.trim();
     final password = passwordController.text.trim();
 
-    // Validate input
     if (username.isEmpty || password.isEmpty) {
       setState(() {
         errorMessage = 'Please enter both username and password';
@@ -39,28 +39,43 @@ class _DriverLoginScreenState extends State<DriverLoginScreen> {
           .select(
               'id, driver_name, username, password, delivery_areas!area_id(area_name)')
           .eq('username', username)
-          .single();
+          .maybeSingle();
 
-      if (response['password'] == password) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(
-            builder: (_) => DriverAssignedCustomersScreen(
-              driverId: response['id'].toString(),
-              driverName: response['driver_name'],
-              areaName: response['delivery_areas']['area_name'],
-            ),
-          ),
-        );
-      } else {
+      if (response == null) {
         setState(() {
-          errorMessage = 'Incorrect password';
+          errorMessage = 'Username not found';
         });
+      } else {
+        if (response['password'] == password) {
+          // Save driver details to shared preferences
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('driverId', response['id'].toString());
+          await prefs.setString('driverName', response['driver_name']);
+          await prefs.setString(
+              'areaName', response['delivery_areas']['area_name']);
+
+          // Navigate to home screen
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => DriverAssignedCustomersScreen(
+                driverId: response['id'].toString(),
+                driverName: response['driver_name'],
+                areaName: response['delivery_areas']['area_name'],
+              ),
+            ),
+          );
+        } else {
+          setState(() {
+            errorMessage = 'Incorrect password';
+          });
+        }
       }
     } catch (e) {
       setState(() {
-        errorMessage = 'Username not found';
+        errorMessage = 'An error occurred. Please try again.';
       });
+      print('Login error: $e');
     } finally {
       setState(() {
         isLoading = false;
