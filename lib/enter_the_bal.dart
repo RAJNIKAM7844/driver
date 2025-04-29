@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 class UpdateCreditScreen extends StatefulWidget {
@@ -20,12 +21,21 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
   double balance = 0.0;
   bool isLoading = false;
   final _supabase = Supabase.instance.client;
+  String? driverId;
 
   @override
   void initState() {
     super.initState();
+    _loadDriverId();
     _loadBalance();
     _setupRealtimeSubscription();
+  }
+
+  Future<void> _loadDriverId() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      driverId = prefs.getString('driverId');
+    });
   }
 
   Future<void> _loadBalance() async {
@@ -35,18 +45,12 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
           .select('credit')
           .eq('user_id', widget.customerId);
 
-      print(
-          'Initial transactions fetch for customerId ${widget.customerId}: $transactionsResponse');
-
       setState(() {
         balance = transactionsResponse.fold(0.0, (sum, t) {
           return sum + (t['credit']?.toDouble() ?? 0.0);
         });
       });
-
-      print('Updated balance (sum of credits) in UpdateCreditScreen: $balance');
     } catch (e) {
-      print('Error fetching balance for customerId ${widget.customerId}: $e');
       setState(() {
         balance = 0.0;
       });
@@ -69,12 +73,48 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
             value: widget.customerId,
           ),
           callback: (payload) {
-            print(
-                'Real-time transaction update for customerId ${widget.customerId}: $payload');
             _loadBalance();
           },
         )
         .subscribe();
+  }
+
+  Future<bool> _checkAndUpdateTrayQuantity(int trays) async {
+    if (driverId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Driver not identified')),
+      );
+      return false;
+    }
+
+    try {
+      final response = await _supabase
+          .from('tray_quantities')
+          .select('quantity')
+          .eq('driver_id', int.parse(driverId!))
+          .maybeSingle();
+
+      final currentQuantity = response?['quantity']?.toInt() ?? 0;
+
+      if (currentQuantity < trays) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Not enough trays available')),
+        );
+        return false;
+      }
+
+      await _supabase.from('tray_quantities').update({
+        'quantity': currentQuantity - trays,
+        'updated_at': DateTime.now().toIso8601String(),
+      }).eq('driver_id', int.parse(driverId!));
+
+      return true;
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error updating tray quantity: $e')),
+      );
+      return false;
+    }
   }
 
   void updateBalance() async {
@@ -99,34 +139,34 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
     });
 
     try {
-      // Fetch the latest egg price from eggs_rates table
+      final traysUpdated = await _checkAndUpdateTrayQuantity(trays);
+      if (!traysUpdated) {
+        setState(() {
+          isLoading = false;
+        });
+        return;
+      }
+
       final eggRateResponse = await _supabase
           .from('egg_rates')
           .select('rate')
           .order('updated_at', ascending: false)
           .limit(1);
 
-      print('Egg rate response: $eggRateResponse');
-
       double eggPrice;
       if (eggRateResponse.isEmpty) {
-        // Fallback to default rate
-        eggPrice = 10.0; // Adjust default rate as needed
-        print('No egg rate found, using default rate: $eggPrice');
+        eggPrice = 10.0;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
               content: Text('No egg rate found, using default rate')),
         );
       } else {
         eggPrice = eggRateResponse[0]['rate'].toDouble();
-        print('Fetched egg price: $eggPrice per egg');
       }
 
-      // Calculate the cost: (egg_price * 30) * trays
       final cost = (eggPrice * 30) * trays;
       final newBalance = balance + cost;
 
-      // Insert a new transaction in the transactions table
       await _supabase.from('transactions').insert({
         'user_id': widget.customerId,
         'date': DateTime.now().toIso8601String(),
@@ -146,7 +186,6 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
         const SnackBar(content: Text('Balance updated successfully')),
       );
     } catch (e) {
-      print('Error updating balance for customerId ${widget.customerId}: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to update balance: $e')),
       );
@@ -159,6 +198,7 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
   @override
   void dispose() {
     _supabase.channel('transactions').unsubscribe();
+    traysController.dispose();
     super.dispose();
   }
 

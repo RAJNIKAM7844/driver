@@ -1,8 +1,9 @@
 import 'package:driver_app/enter_the_bal.dart';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
-class CustomerDetailScreen extends StatelessWidget {
-  final String customerId; // For navigating to UpdateCreditScreen
+class CustomerDetailScreen extends StatefulWidget {
+  final String customerId;
   final String name;
   final String number;
   final String area;
@@ -20,6 +21,47 @@ class CustomerDetailScreen extends StatelessWidget {
     required this.shopImageUrl,
     required this.email,
   });
+
+  @override
+  State<CustomerDetailScreen> createState() => _CustomerDetailScreenState();
+}
+
+class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
+  final _supabase = Supabase.instance.client;
+  double balance = 0.0;
+  bool isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBalance();
+  }
+
+  Future<void> _loadBalance() async {
+    try {
+      final transactionsResponse = await _supabase
+          .from('transactions')
+          .select('credit, paid, balance')
+          .eq('user_id', widget.customerId);
+
+      double totalCredit = 0.0;
+      double totalPaid = 0.0;
+      for (var t in transactionsResponse) {
+        totalCredit += (t['credit']?.toDouble() ?? 0.0);
+        totalPaid += (t['paid']?.toDouble() ?? 0.0);
+      }
+      setState(() {
+        balance = totalCredit - totalPaid;
+      });
+    } catch (e) {
+      setState(() {
+        balance = 0.0;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to load balance: $e')),
+      );
+    }
+  }
 
   void _showImageDialog(BuildContext context, String imageUrl) {
     if (imageUrl.isEmpty) return;
@@ -45,6 +87,127 @@ class CustomerDetailScreen extends StatelessWidget {
     );
   }
 
+  void _showPaymentDialog() {
+    final TextEditingController amountController = TextEditingController();
+    String? selectedPaymentMode;
+    final List<String> paymentModes = ['Cash', 'UPI', 'Bank Transfer'];
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Enter Payment Details'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: amountController,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(
+                  labelText: 'Amount Collected (₹)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 16),
+              DropdownButtonFormField<String>(
+                value: selectedPaymentMode,
+                decoration: const InputDecoration(
+                  labelText: 'Mode of Payment',
+                  border: OutlineInputBorder(),
+                ),
+                items: paymentModes.map((mode) {
+                  return DropdownMenuItem<String>(
+                    value: mode,
+                    child: Text(mode),
+                  );
+                }).toList(),
+                onChanged: (value) {
+                  selectedPaymentMode = value;
+                },
+                validator: (value) =>
+                    value == null ? 'Please select a payment mode' : null,
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: isLoading
+                ? null
+                : () async {
+                    final amountText = amountController.text.trim();
+                    final amount = double.tryParse(amountText);
+                    if (amount == null || amount <= 0) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Please enter a valid amount')),
+                      );
+                      return;
+                    }
+                    if (selectedPaymentMode == null) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Please select a mode of payment')),
+                      );
+                      return;
+                    }
+                    if (amount > balance) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content:
+                                Text('Amount cannot exceed current balance')),
+                      );
+                      return;
+                    }
+
+                    setState(() {
+                      isLoading = true;
+                    });
+
+                    try {
+                      final newBalance = balance - amount;
+                      await _supabase.from('transactions').insert({
+                        'user_id': widget.customerId,
+                        'date': DateTime.now().toIso8601String(),
+                        'credit': 0.0,
+                        'paid': amount,
+                        'balance': newBalance,
+                        'mode_of_payment': selectedPaymentMode,
+                      });
+
+                      setState(() {
+                        balance = newBalance;
+                        isLoading = false;
+                      });
+
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                            content: Text('Payment recorded successfully')),
+                      );
+                    } catch (e) {
+                      setState(() {
+                        isLoading = false;
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Failed to record payment: $e')),
+                      );
+                    }
+                  },
+            child: isLoading
+                ? const CircularProgressIndicator()
+                : const Text('Done'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -55,7 +218,6 @@ class CustomerDetailScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Header
               ClipRRect(
                 borderRadius: const BorderRadius.only(
                   bottomLeft: Radius.circular(30),
@@ -82,25 +244,41 @@ class CustomerDetailScreen extends StatelessWidget {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
+                      const Spacer(),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Text(
+                          'Bal: ₹${balance.toStringAsFixed(2)}',
+                          style: const TextStyle(
+                            color: Colors.black,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 24),
-
-              // Profile and Shop Images
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   GestureDetector(
-                    onTap: () => _showImageDialog(context, profileImageUrl),
+                    onTap: () =>
+                        _showImageDialog(context, widget.profileImageUrl),
                     child: CircleAvatar(
                       radius: 30,
-                      backgroundImage: profileImageUrl.isNotEmpty
-                          ? NetworkImage(profileImageUrl)
+                      backgroundImage: widget.profileImageUrl.isNotEmpty
+                          ? NetworkImage(widget.profileImageUrl)
                           : null,
                       backgroundColor: Colors.grey.shade300,
-                      child: profileImageUrl.isEmpty
+                      child: widget.profileImageUrl.isEmpty
                           ? const Icon(Icons.person,
                               size: 40, color: Colors.black54)
                           : null,
@@ -108,14 +286,14 @@ class CustomerDetailScreen extends StatelessWidget {
                   ),
                   const SizedBox(width: 20),
                   GestureDetector(
-                    onTap: () => _showImageDialog(context, shopImageUrl),
+                    onTap: () => _showImageDialog(context, widget.shopImageUrl),
                     child: CircleAvatar(
                       radius: 30,
-                      backgroundImage: shopImageUrl.isNotEmpty
-                          ? NetworkImage(shopImageUrl)
+                      backgroundImage: widget.shopImageUrl.isNotEmpty
+                          ? NetworkImage(widget.shopImageUrl)
                           : null,
                       backgroundColor: Colors.grey.shade300,
-                      child: shopImageUrl.isEmpty
+                      child: widget.shopImageUrl.isEmpty
                           ? const Icon(Icons.shopping_cart,
                               size: 40, color: Colors.black54)
                           : null,
@@ -124,19 +302,14 @@ class CustomerDetailScreen extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 40),
-
-              // Customer Info Cards
-              _infoCard(Icons.person_outline, 'Name', name),
+              _infoCard(Icons.person_outline, 'Name', widget.name),
               const SizedBox(height: 16),
-              _infoCard(Icons.email_outlined, 'Email', email),
+              _infoCard(Icons.email_outlined, 'Email', widget.email),
               const SizedBox(height: 16),
-              _infoCard(Icons.phone_outlined, 'Phone',
-                  number), // Added phone number display
+              _infoCard(Icons.phone_outlined, 'Phone', widget.number),
               const SizedBox(height: 16),
-              _infoCard(Icons.location_on_outlined, 'Area', area),
+              _infoCard(Icons.location_on_outlined, 'Area', widget.area),
               const SizedBox(height: 40),
-
-              // Update Credit Button
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
@@ -145,11 +318,11 @@ class CustomerDetailScreen extends StatelessWidget {
                       context,
                       MaterialPageRoute(
                         builder: (_) => UpdateCreditScreen(
-                          customerId: customerId,
-                          customerName: name,
+                          customerId: widget.customerId,
+                          customerName: widget.name,
                         ),
                       ),
-                    );
+                    ).then((_) => _loadBalance());
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1E1E5A),
@@ -169,8 +342,6 @@ class CustomerDetailScreen extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 16),
-
-              // Warning Text
               const Text(
                 'Check all the details before clicking on payment',
                 style: TextStyle(
@@ -181,14 +352,10 @@ class CustomerDetailScreen extends StatelessWidget {
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 16),
-
-              // Payment Button
               SizedBox(
                 width: double.infinity,
                 child: ElevatedButton(
-                  onPressed: () {
-                    // TODO: Implement payment logic
-                  },
+                  onPressed: balance > 0 ? _showPaymentDialog : null,
                   style: ElevatedButton.styleFrom(
                     backgroundColor: const Color(0xFF1E1E5A),
                     padding: const EdgeInsets.symmetric(vertical: 15),

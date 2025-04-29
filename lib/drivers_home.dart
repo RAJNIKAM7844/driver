@@ -27,12 +27,15 @@ class _DriverAssignedCustomersScreenState
   List<Map<String, dynamic>> customers = [];
   List<Map<String, dynamic>> filteredCustomers = [];
   bool isLoading = false;
+  int trayQuantity = 0;
   TextEditingController searchController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
     fetchAssignedCustomers();
+    fetchTrayQuantity();
+    setupRealtimeTraySubscription();
   }
 
   Future<void> fetchAssignedCustomers() async {
@@ -62,6 +65,43 @@ class _DriverAssignedCustomersScreenState
         SnackBar(content: Text('Error fetching customers: $e')),
       );
     }
+  }
+
+  Future<void> fetchTrayQuantity() async {
+    try {
+      final response = await supabase
+          .from('tray_quantities')
+          .select('quantity')
+          .eq('driver_id', int.parse(widget.driverId))
+          .maybeSingle();
+
+      setState(() {
+        trayQuantity = response?['quantity']?.toInt() ?? 0;
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error fetching tray quantity: $e')),
+      );
+    }
+  }
+
+  void setupRealtimeTraySubscription() {
+    supabase
+        .channel('tray_quantities_${widget.driverId}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'tray_quantities',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'driver_id',
+            value: widget.driverId,
+          ),
+          callback: (payload) {
+            fetchTrayQuantity();
+          },
+        )
+        .subscribe();
   }
 
   void filterCustomers(String query) {
@@ -188,15 +228,27 @@ class _DriverAssignedCustomersScreenState
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Expanded(
-                      child: Text(
-                        'Welcome ${widget.driverName}',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 24,
-                          fontWeight: FontWeight.bold,
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Trays: $trayQuantity',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
-                      ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Welcome ${widget.driverName}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
                     ),
                     IconButton(
                       icon: const Icon(Icons.logout, color: Colors.white),
@@ -239,6 +291,7 @@ class _DriverAssignedCustomersScreenState
               child: RefreshIndicator(
                 onRefresh: () async {
                   await fetchAssignedCustomers();
+                  await fetchTrayQuantity();
                 },
                 child: isLoading
                     ? const Center(child: CircularProgressIndicator())
@@ -266,5 +319,11 @@ class _DriverAssignedCustomersScreenState
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    supabase.channel('tray_quantities_${widget.driverId}').unsubscribe();
+    super.dispose();
   }
 }
