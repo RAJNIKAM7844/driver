@@ -28,6 +28,7 @@ class _DriverAssignedCustomersScreenState
   List<Map<String, dynamic>> filteredCustomers = [];
   bool isLoading = false;
   int trayQuantity = 0;
+  int totalCrates = 0;
   TextEditingController searchController = TextEditingController();
 
   @override
@@ -48,6 +49,7 @@ class _DriverAssignedCustomersScreenState
           .select(
               'id, full_name, location, phone, profile_image, shop_image, email')
           .eq('location', widget.areaName)
+          .eq('role', 'customer')
           .order('full_name', ascending: true);
 
       setState(() {
@@ -55,6 +57,10 @@ class _DriverAssignedCustomersScreenState
         filteredCustomers = List<Map<String, dynamic>>.from(response);
         isLoading = false;
       });
+      await fetchTotalCrates();
+      if (customers.isNotEmpty) {
+        setupRealtimeCrateSubscription();
+      }
     } catch (e) {
       setState(() {
         customers = [];
@@ -85,6 +91,37 @@ class _DriverAssignedCustomersScreenState
     }
   }
 
+  Future<void> fetchTotalCrates() async {
+    if (customers.isEmpty) {
+      setState(() {
+        totalCrates = 0;
+      });
+      return;
+    }
+
+    try {
+      final response = await supabase
+          .from('crates')
+          .select('quantity')
+          .inFilter('user_id', customers.map((c) => c['id']).toList());
+
+      int total = 0;
+      for (var item in response) {
+        total += ((item['quantity'] as num?)?.toInt() ?? 0);
+      }
+      setState(() {
+        totalCrates = total;
+      });
+    } catch (e) {
+      setState(() {
+        totalCrates = 0;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error fetching crate quantity: $e')),
+      );
+    }
+  }
+
   void setupRealtimeTraySubscription() {
     supabase
         .channel('tray_quantities_${widget.driverId}')
@@ -99,6 +136,25 @@ class _DriverAssignedCustomersScreenState
           ),
           callback: (payload) {
             fetchTrayQuantity();
+          },
+        )
+        .subscribe();
+  }
+
+  void setupRealtimeCrateSubscription() {
+    supabase
+        .channel('crates_${widget.areaName}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'crates',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.inFilter,
+            column: 'user_id',
+            value: customers.map((c) => c['id']).toList(),
+          ),
+          callback: (payload) {
+            fetchTotalCrates();
           },
         )
         .subscribe();
@@ -127,16 +183,20 @@ class _DriverAssignedCustomersScreenState
     );
   }
 
-  Widget buildCustomerItem(Map<String, dynamic> customer) {
+  Widget buildCustomerItem(
+      Map<String, dynamic> customer, BoxConstraints constraints) {
     final imageUrl = customer['profile_image'] ?? '';
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+      padding: EdgeInsets.symmetric(
+        vertical: constraints.maxHeight * 0.01,
+        horizontal: constraints.maxWidth * 0.04,
+      ),
       child: Material(
         color: Colors.white,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
         elevation: 2,
         child: InkWell(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(12),
           onTap: () {
             Navigator.push(
               context,
@@ -154,12 +214,15 @@ class _DriverAssignedCustomersScreenState
             );
           },
           child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 20),
+            padding: EdgeInsets.symmetric(
+              vertical: constraints.maxHeight * 0.02,
+              horizontal: constraints.maxWidth * 0.04,
+            ),
             child: Row(
               children: [
                 CircleAvatar(
-                  radius: 25,
-                  backgroundColor: Colors.grey.shade300,
+                  radius: constraints.maxWidth * 0.06,
+                  backgroundColor: Colors.grey[300],
                   backgroundImage:
                       imageUrl.isNotEmpty ? NetworkImage(imageUrl) : null,
                   child: imageUrl.isEmpty
@@ -170,7 +233,7 @@ class _DriverAssignedCustomersScreenState
                         )
                       : null,
                 ),
-                const SizedBox(width: 16),
+                SizedBox(width: constraints.maxWidth * 0.04),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -178,12 +241,12 @@ class _DriverAssignedCustomersScreenState
                       Text(
                         customer['full_name'] ?? 'Unknown',
                         style: const TextStyle(
-                          color: Colors.black,
-                          fontSize: 20,
+                          color: Colors.black87,
+                          fontSize: 18,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
-                      const SizedBox(height: 4),
+                      SizedBox(height: constraints.maxHeight * 0.005),
                       Text(
                         customer['location'] ?? '-',
                         style: const TextStyle(
@@ -211,111 +274,134 @@ class _DriverAssignedCustomersScreenState
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color.fromARGB(255, 181, 182, 183),
+      backgroundColor: Colors.grey[100],
       body: SafeArea(
-        child: Column(
-          children: [
-            ClipRRect(
-              borderRadius: const BorderRadius.only(
-                bottomLeft: Radius.circular(30),
-                bottomRight: Radius.circular(30),
-              ),
-              child: Container(
-                width: double.infinity,
-                color: const Color(0xFF1976D2),
-                padding:
-                    const EdgeInsets.symmetric(vertical: 40, horizontal: 30),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'Trays: $trayQuantity',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return Column(
+              children: [
+                Container(
+                  width: double.infinity,
+                  decoration: const BoxDecoration(
+                    color: Color(0xFF1976D2),
+                    borderRadius: BorderRadius.only(
+                      bottomLeft: Radius.circular(30),
+                      bottomRight: Radius.circular(30),
+                    ),
+                  ),
+                  padding: EdgeInsets.symmetric(
+                    vertical: constraints.maxHeight * 0.04,
+                    horizontal: constraints.maxWidth * 0.06,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Welcome ${widget.driverName}',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                            ),
                           ),
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          'Welcome ${widget.driverName}',
-                          style: const TextStyle(
-                            color: Colors.white,
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
+                          SizedBox(height: constraints.maxHeight * 0.01),
+                          Text(
+                            'Trays: $trayQuantity',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
+                          SizedBox(height: constraints.maxHeight * 0.005),
+                          Text(
+                            'Total Crates: $totalCrates',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.logout,
+                            color: Colors.white, size: 28),
+                        onPressed: _logout,
+                        tooltip: 'Logout',
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: constraints.maxWidth * 0.04,
+                    vertical: constraints.maxHeight * 0.01,
+                  ),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.05),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
                         ),
                       ],
                     ),
-                    IconButton(
-                      icon: const Icon(Icons.logout, color: Colors.white),
-                      onPressed: _logout,
-                      tooltip: 'Logout',
+                    child: TextField(
+                      controller: searchController,
+                      onChanged: filterCustomers,
+                      style: const TextStyle(color: Colors.black87),
+                      decoration: InputDecoration(
+                        hintText: 'Search by name or address',
+                        hintStyle: TextStyle(color: Colors.grey[400]),
+                        border: InputBorder.none,
+                        prefixIcon:
+                            const Icon(Icons.search, color: Colors.grey),
+                        contentPadding: const EdgeInsets.symmetric(
+                            vertical: 14, horizontal: 16),
+                      ),
                     ),
-                  ],
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.1),
-                      blurRadius: 4,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: TextField(
-                  controller: searchController,
-                  onChanged: filterCustomers,
-                  style: const TextStyle(color: Colors.black87),
-                  decoration: InputDecoration(
-                    hintText: 'Search by name or address',
-                    hintStyle: TextStyle(color: Colors.grey.shade600),
-                    border: InputBorder.none,
-                    prefixIcon: const Icon(Icons.search, color: Colors.grey),
-                    contentPadding: const EdgeInsets.symmetric(vertical: 20),
                   ),
                 ),
-              ),
-            ),
-            Expanded(
-              child: RefreshIndicator(
-                onRefresh: () async {
-                  await fetchAssignedCustomers();
-                  await fetchTrayQuantity();
-                },
-                child: isLoading
-                    ? const Center(child: CircularProgressIndicator())
-                    : filteredCustomers.isEmpty
-                        ? const Center(
-                            child: Text(
-                              'No customers assigned to this driver.',
-                              style: TextStyle(
-                                color: Colors.black54,
-                                fontSize: 16,
+                Expanded(
+                  child: RefreshIndicator(
+                    onRefresh: () async {
+                      await fetchAssignedCustomers();
+                      await fetchTrayQuantity();
+                      await fetchTotalCrates();
+                    },
+                    child: isLoading
+                        ? const Center(child: CircularProgressIndicator())
+                        : filteredCustomers.isEmpty
+                            ? const Center(
+                                child: Text(
+                                  'No customers assigned to this driver.',
+                                  style: TextStyle(
+                                    color: Colors.black54,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              )
+                            : ListView.builder(
+                                padding: EdgeInsets.symmetric(
+                                    vertical: constraints.maxHeight * 0.01),
+                                itemCount: filteredCustomers.length,
+                                itemBuilder: (context, index) {
+                                  return buildCustomerItem(
+                                      filteredCustomers[index], constraints);
+                                },
                               ),
-                            ),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.symmetric(vertical: 8),
-                            itemCount: filteredCustomers.length,
-                            itemBuilder: (context, index) {
-                              return buildCustomerItem(
-                                  filteredCustomers[index]);
-                            },
-                          ),
-              ),
-            ),
-          ],
+                  ),
+                ),
+              ],
+            );
+          },
         ),
       ),
     );
@@ -324,6 +410,7 @@ class _DriverAssignedCustomersScreenState
   @override
   void dispose() {
     supabase.channel('tray_quantities_${widget.driverId}').unsubscribe();
+    supabase.channel('crates_${widget.areaName}').unsubscribe();
     super.dispose();
   }
 }

@@ -19,7 +19,10 @@ class UpdateCreditScreen extends StatefulWidget {
 class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
   final TextEditingController traysController = TextEditingController();
   double balance = 0.0;
+  int crateQuantity = 0;
   bool isLoading = false;
+  bool isCustomer = false;
+  String? errorMessage;
   final _supabase = Supabase.instance.client;
   String? driverId;
 
@@ -27,8 +30,7 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
   void initState() {
     super.initState();
     _loadDriverId();
-    _loadBalance();
-    _setupRealtimeSubscription();
+    _checkCustomerRole();
   }
 
   Future<void> _loadDriverId() async {
@@ -38,17 +40,49 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
     });
   }
 
+  Future<void> _checkCustomerRole() async {
+    try {
+      final response = await _supabase
+          .from('users')
+          .select('role')
+          .eq('id', widget.customerId)
+          .single();
+
+      if (response['role'] == 'customer') {
+        setState(() {
+          isCustomer = true;
+        });
+        _loadBalance();
+        _loadCrateQuantity();
+        _setupRealtimeSubscription();
+        _setupRealtimeCrateSubscription();
+      } else {
+        setState(() {
+          errorMessage = 'This user is not a customer.';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        errorMessage = 'Error verifying customer role: $e';
+      });
+    }
+  }
+
   Future<void> _loadBalance() async {
     try {
       final transactionsResponse = await _supabase
           .from('transactions')
-          .select('credit')
+          .select('credit, paid')
           .eq('user_id', widget.customerId);
 
+      double totalCredit = 0.0;
+      double totalPaid = 0.0;
+      for (var t in transactionsResponse) {
+        totalCredit += (t['credit']?.toDouble() ?? 0.0);
+        totalPaid += (t['paid']?.toDouble() ?? 0.0);
+      }
       setState(() {
-        balance = transactionsResponse.fold(0.0, (sum, t) {
-          return sum + (t['credit']?.toDouble() ?? 0.0);
-        });
+        balance = totalCredit - totalPaid;
       });
     } catch (e) {
       setState(() {
@@ -60,9 +94,30 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
     }
   }
 
+  Future<void> _loadCrateQuantity() async {
+    try {
+      final response = await _supabase
+          .from('crates')
+          .select('quantity')
+          .eq('user_id', widget.customerId)
+          .maybeSingle();
+
+      setState(() {
+        crateQuantity = response?['quantity']?.toInt() ?? 0;
+      });
+    } catch (e) {
+      setState(() {
+        crateQuantity = 0;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error fetching crate quantity: $e')),
+      );
+    }
+  }
+
   void _setupRealtimeSubscription() {
     _supabase
-        .channel('transactions')
+        .channel('transactions_${widget.customerId}')
         .onPostgresChanges(
           event: PostgresChangeEvent.all,
           schema: 'public',
@@ -74,6 +129,25 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
           ),
           callback: (payload) {
             _loadBalance();
+          },
+        )
+        .subscribe();
+  }
+
+  void _setupRealtimeCrateSubscription() {
+    _supabase
+        .channel('crates_${widget.customerId}')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'crates',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'user_id',
+            value: widget.customerId,
+          ),
+          callback: (payload) {
+            _loadCrateQuantity();
           },
         )
         .subscribe();
@@ -197,169 +271,237 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
 
   @override
   void dispose() {
-    _supabase.channel('transactions').unsubscribe();
+    if (isCustomer) {
+      _supabase.channel('transactions_${widget.customerId}').unsubscribe();
+      _supabase.channel('crates_${widget.customerId}').unsubscribe();
+    }
     traysController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.white,
-      body: SafeArea(
-        child: Stack(
-          children: [
-            Positioned(
-              top: 0,
-              left: 0,
-              right: 0,
-              child: ClipRRect(
-                borderRadius: const BorderRadius.only(
-                  bottomLeft: Radius.circular(30),
-                  bottomRight: Radius.circular(30),
-                ),
-                child: Container(
-                  height: 150,
-                  color: const Color(0xFF1976D2),
-                ),
-              ),
-            ),
-            Column(
+    if (errorMessage != null) {
+      return Scaffold(
+        backgroundColor: Colors.grey[100],
+        body: SafeArea(
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                  child: Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back,
-                            color: Colors.white, size: 30),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                      const Spacer(),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        child: Text(
-                          'Bal: ₹${balance.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            color: Colors.black,
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    ],
+                Text(
+                  errorMessage!,
+                  style: const TextStyle(
+                    color: Colors.red,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
                   ),
+                  textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 20),
-                CircleAvatar(
-                  radius: 40,
-                  backgroundColor: Colors.grey.shade300,
-                  child: const Icon(
-                    Icons.person,
-                    size: 50,
-                    color: Colors.black54,
-                  ),
-                ),
-                const SizedBox(height: 40),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Enter the No of trays purchased',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w500,
-                          color: Colors.black87,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade100,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: TextField(
-                          controller: traysController,
-                          keyboardType: TextInputType.number,
-                          style: const TextStyle(fontSize: 18),
-                          decoration: const InputDecoration(
-                            border: InputBorder.none,
-                            contentPadding: EdgeInsets.symmetric(
-                                horizontal: 16, vertical: 14),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 40),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () {
-                        // TODO: Implement admin logic
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1E1E5A),
-                        padding: const EdgeInsets.symmetric(vertical: 15),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                      child: const Text(
-                        'Admin',
-                        style: TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.bold,
-                          color: Colors.white,
-                        ),
-                      ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1976D2),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
                     ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: isLoading ? null : updateBalance,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF1E1E5A),
-                        padding: const EdgeInsets.symmetric(vertical: 15),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                      ),
-                      child: isLoading
-                          ? const CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            )
-                          : const Text(
-                              'Done',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.white,
-                              ),
-                            ),
+                  child: const Text(
+                    'Go Back',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
                     ),
                   ),
                 ),
               ],
             ),
-          ],
+          ),
+        ),
+      );
+    }
+
+    if (!isCustomer) {
+      return const Scaffold(
+        backgroundColor: Colors.white,
+        body: SafeArea(
+          child: Center(child: CircularProgressIndicator()),
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: Colors.grey[100],
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            return SingleChildScrollView(
+              child: ConstrainedBox(
+                constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                child: Column(
+                  children: [
+                    Container(
+                      width: double.infinity,
+                      decoration: const BoxDecoration(
+                        color: Color(0xFF1976D2),
+                        borderRadius: BorderRadius.only(
+                          bottomLeft: Radius.circular(30),
+                          bottomRight: Radius.circular(30),
+                        ),
+                      ),
+                      padding: EdgeInsets.symmetric(
+                        vertical: constraints.maxHeight * 0.03,
+                        horizontal: constraints.maxWidth * 0.04,
+                      ),
+                      child: Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.arrow_back,
+                                color: Colors.white, size: 28),
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                          const Spacer(),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(20),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.1),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: Text(
+                              'Bal: ₹${balance.toStringAsFixed(2)}',
+                              style: const TextStyle(
+                                color: Colors.black87,
+                                fontSize: 16,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: constraints.maxHeight * 0.03),
+                    CircleAvatar(
+                      radius: constraints.maxWidth * 0.12,
+                      backgroundColor: Colors.grey[300],
+                      child: const Icon(
+                        Icons.person,
+                        size: 50,
+                        color: Colors.black54,
+                      ),
+                    ),
+                    SizedBox(height: constraints.maxHeight * 0.04),
+                    Padding(
+                      padding: EdgeInsets.symmetric(
+                          horizontal: constraints.maxWidth * 0.05),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.customerName,
+                            style: const TextStyle(
+                              fontSize: 24,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.black87,
+                            ),
+                          ),
+                          SizedBox(height: constraints.maxHeight * 0.01),
+                          Text(
+                            'Crates: $crateQuantity',
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.black54,
+                            ),
+                          ),
+                          SizedBox(height: constraints.maxHeight * 0.01),
+                          const Text(
+                            'Enter the No of trays purchased',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w500,
+                              color: Colors.black54,
+                            ),
+                          ),
+                          SizedBox(height: constraints.maxHeight * 0.015),
+                          Container(
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 4,
+                                  offset: const Offset(0, 2),
+                                ),
+                              ],
+                            ),
+                            child: TextField(
+                              controller: traysController,
+                              keyboardType: TextInputType.number,
+                              style: const TextStyle(
+                                  fontSize: 16, color: Colors.black87),
+                              decoration: InputDecoration(
+                                hintText: 'Number of trays',
+                                hintStyle: TextStyle(color: Colors.grey[400]),
+                                border: InputBorder.none,
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 14),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    SizedBox(height: constraints.maxHeight * 0.05),
+                    Padding(
+                      padding: EdgeInsets.symmetric(
+                          horizontal: constraints.maxWidth * 0.05),
+                      child: SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: isLoading ? null : updateBalance,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF1976D2),
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            elevation: 2,
+                          ),
+                          child: isLoading
+                              ? const CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 2,
+                                )
+                              : const Text(
+                                  'Done',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(height: constraints.maxHeight * 0.03),
+                  ],
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
