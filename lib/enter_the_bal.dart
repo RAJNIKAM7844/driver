@@ -208,6 +208,13 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
       return;
     }
 
+    if (driverId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Driver not identified')),
+      );
+      return;
+    }
+
     setState(() {
       isLoading = true;
     });
@@ -241,6 +248,7 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
       final cost = (eggPrice * 30) * trays;
       final newBalance = balance + cost;
 
+      // Insert transaction with driver_id
       await _supabase.from('transactions').insert({
         'user_id': widget.customerId,
         'date': DateTime.now().toIso8601String(),
@@ -248,6 +256,7 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
         'paid': 0.0,
         'balance': newBalance,
         'mode_of_payment': 'Pending',
+        'driver_id': int.parse(driverId!), // Added driver_id
       });
 
       setState(() {
@@ -260,6 +269,7 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
         const SnackBar(content: Text('Balance updated successfully')),
       );
     } catch (e) {
+      print('Error updating balance: $e'); // Log error for debugging
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to update balance: $e')),
       );
