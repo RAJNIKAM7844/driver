@@ -1,3 +1,4 @@
+import 'package:driver_app/login.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -30,14 +31,44 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
   void initState() {
     super.initState();
     _loadDriverId();
-    _checkCustomerRole();
   }
 
   Future<void> _loadDriverId() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      driverId = prefs.getString('driverId');
-    });
+    final storedDriverId = prefs.getString('driverId');
+    print('SharedPreferences driverId: $storedDriverId');
+
+    if (storedDriverId == null || storedDriverId.isEmpty) {
+      print('Error: No driverId found in SharedPreferences');
+      setState(() {
+        errorMessage = 'Driver ID not found. Please log in again.';
+      });
+      // Redirect to login screen
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const DriverLoginScreen()),
+      );
+      return;
+    }
+
+    try {
+      int.parse(storedDriverId); // Validate it's a number
+      setState(() {
+        driverId = storedDriverId;
+        print('Driver ID set: $driverId');
+      });
+      _checkCustomerRole();
+    } catch (e) {
+      print('Error: Invalid driverId format: $storedDriverId');
+      setState(() {
+        errorMessage = 'Invalid Driver ID format. Please log in again.';
+      });
+      await prefs.clear();
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const DriverLoginScreen()),
+      );
+    }
   }
 
   Future<void> _checkCustomerRole() async {
@@ -162,10 +193,11 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
     }
 
     try {
+      final parsedDriverId = int.parse(driverId!);
       final response = await _supabase
           .from('tray_quantities')
           .select('quantity')
-          .eq('driver_id', int.parse(driverId!))
+          .eq('driver_id', parsedDriverId)
           .maybeSingle();
 
       final currentQuantity = response?['quantity']?.toInt() ?? 0;
@@ -180,10 +212,11 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
       await _supabase.from('tray_quantities').update({
         'quantity': currentQuantity - trays,
         'updated_at': DateTime.now().toIso8601String(),
-      }).eq('driver_id', int.parse(driverId!));
+      }).eq('driver_id', parsedDriverId);
 
       return true;
     } catch (e) {
+      print('Error in _checkAndUpdateTrayQuantity: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error updating tray quantity: $e')),
       );
@@ -210,7 +243,8 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
 
     if (driverId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Driver not identified')),
+        const SnackBar(
+            content: Text('Driver not identified. Please log in again.')),
       );
       return;
     }
@@ -220,6 +254,7 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
     });
 
     try {
+      final parsedDriverId = int.parse(driverId!);
       final traysUpdated = await _checkAndUpdateTrayQuantity(trays);
       if (!traysUpdated) {
         setState(() {
@@ -248,7 +283,7 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
       final cost = (eggPrice * 30) * trays;
       final newBalance = balance + cost;
 
-      // Insert transaction with driver_id
+      print('Inserting transaction with driver_id: $parsedDriverId');
       await _supabase.from('transactions').insert({
         'user_id': widget.customerId,
         'date': DateTime.now().toIso8601String(),
@@ -256,7 +291,7 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
         'paid': 0.0,
         'balance': newBalance,
         'mode_of_payment': 'Pending',
-        'driver_id': int.parse(driverId!), // Added driver_id
+        'driver_id': parsedDriverId,
       });
 
       setState(() {
@@ -269,7 +304,7 @@ class _UpdateCreditScreenState extends State<UpdateCreditScreen> {
         const SnackBar(content: Text('Balance updated successfully')),
       );
     } catch (e) {
-      print('Error updating balance: $e'); // Log error for debugging
+      print('Error in updateBalance: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to update balance: $e')),
       );

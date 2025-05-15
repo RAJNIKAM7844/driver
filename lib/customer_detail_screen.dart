@@ -1,4 +1,5 @@
 import 'package:driver_app/enter_the_bal.dart';
+import 'package:driver_app/login.dart';
 import 'package:driver_app/qrpayment.dart';
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -11,6 +12,7 @@ class CustomerDetailScreen extends StatefulWidget {
   final String profileImageUrl;
   final String shopImageUrl;
   final String email;
+  final String driverId;
 
   const CustomerDetailScreen({
     super.key,
@@ -21,6 +23,7 @@ class CustomerDetailScreen extends StatefulWidget {
     required this.profileImageUrl,
     required this.shopImageUrl,
     required this.email,
+    required this.driverId,
   });
 
   @override
@@ -38,7 +41,34 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
   @override
   void initState() {
     super.initState();
-    _checkCustomerRole();
+    _validateDriverId();
+  }
+
+  Future<void> _validateDriverId() async {
+    if (widget.driverId.isEmpty) {
+      setState(() {
+        errorMessage = 'Driver ID missing. Please log in again.';
+      });
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const DriverLoginScreen()),
+      );
+      return;
+    }
+
+    try {
+      int.parse(widget.driverId);
+      _checkCustomerRole();
+    } catch (e) {
+      print('Error: Invalid driverId format: ${widget.driverId}');
+      setState(() {
+        errorMessage = 'Invalid Driver ID format. Please log in again.';
+      });
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const DriverLoginScreen()),
+      );
+    }
   }
 
   Future<void> _checkCustomerRole() async {
@@ -276,7 +306,10 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                     });
 
                     try {
+                      final parsedDriverId = int.parse(widget.driverId);
                       final newBalance = balance - amount;
+                      print(
+                          'Inserting payment transaction with driver_id: $parsedDriverId');
                       await _supabase.from('transactions').insert({
                         'user_id': widget.customerId,
                         'date': DateTime.now().toIso8601String(),
@@ -284,6 +317,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                         'paid': amount,
                         'balance': newBalance,
                         'mode_of_payment': selectedPaymentMode,
+                        'driver_id': parsedDriverId,
                       });
 
                       setState(() {
@@ -297,6 +331,7 @@ class _CustomerDetailScreenState extends State<CustomerDetailScreen> {
                             content: Text('Payment recorded successfully')),
                       );
                     } catch (e) {
+                      print('Error in _showPaymentDialog: $e');
                       setState(() {
                         isLoading = false;
                       });

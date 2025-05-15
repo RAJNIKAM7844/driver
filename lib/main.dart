@@ -42,12 +42,27 @@ class _MyAppState extends State<MyApp> {
     if (storedDriverId != null &&
         storedDriverName != null &&
         storedAreaName != null) {
-      setState(() {
-        isLoggedIn = true;
-        driverId = storedDriverId;
-        driverName = storedDriverName;
-        areaName = storedAreaName;
-      });
+      try {
+        final response = await Supabase.instance.client
+            .from('drivers')
+            .select('id')
+            .eq('id', int.parse(storedDriverId))
+            .maybeSingle();
+        if (response != null) {
+          setState(() {
+            isLoggedIn = true;
+            driverId = storedDriverId;
+            driverName = storedDriverName;
+            areaName = storedAreaName;
+          });
+        } else {
+          await prefs.clear();
+          print('Invalid driverId, cleared SharedPreferences');
+        }
+      } catch (e) {
+        print('Error validating driverId: $e');
+        await prefs.clear();
+      }
     }
   }
 

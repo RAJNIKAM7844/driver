@@ -30,13 +30,43 @@ class _DriverAssignedCustomersScreenState
   int trayQuantity = 0;
   int totalCrates = 0;
   TextEditingController searchController = TextEditingController();
+  String? errorMessage;
 
   @override
   void initState() {
     super.initState();
-    fetchAssignedCustomers();
-    fetchTrayQuantity();
-    setupRealtimeTraySubscription();
+    _validateDriverId();
+  }
+
+  Future<void> _validateDriverId() async {
+    if (widget.driverId.isEmpty) {
+      setState(() {
+        errorMessage = 'Driver ID missing. Please log in again.';
+      });
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const DriverLoginScreen()),
+      );
+      return;
+    }
+
+    try {
+      int.parse(widget.driverId);
+      fetchAssignedCustomers();
+      fetchTrayQuantity();
+      setupRealtimeTraySubscription();
+    } catch (e) {
+      print('Error: Invalid driverId format: ${widget.driverId}');
+      setState(() {
+        errorMessage = 'Invalid Driver ID format. Please log in again.';
+      });
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(builder: (_) => const DriverLoginScreen()),
+      );
+    }
   }
 
   Future<void> fetchAssignedCustomers() async {
@@ -52,6 +82,7 @@ class _DriverAssignedCustomersScreenState
           .eq('role', 'customer')
           .order('full_name', ascending: true);
 
+      print('Fetched customers: $response');
       setState(() {
         customers = List<Map<String, dynamic>>.from(response);
         filteredCustomers = List<Map<String, dynamic>>.from(response);
@@ -75,12 +106,14 @@ class _DriverAssignedCustomersScreenState
 
   Future<void> fetchTrayQuantity() async {
     try {
+      final parsedDriverId = int.parse(widget.driverId);
       final response = await supabase
           .from('tray_quantities')
           .select('quantity')
-          .eq('driver_id', int.parse(widget.driverId))
+          .eq('driver_id', parsedDriverId)
           .maybeSingle();
 
+      print('Tray quantity response: $response');
       setState(() {
         trayQuantity = response?['quantity']?.toInt() ?? 0;
       });
@@ -173,9 +206,8 @@ class _DriverAssignedCustomersScreenState
 
   void _logout() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('driverId');
-    await prefs.remove('driverName');
-    await prefs.remove('areaName');
+    await prefs.clear(); // Clear all keys
+    print('Cleared SharedPreferences on logout');
     Navigator.pushAndRemoveUntil(
       context,
       MaterialPageRoute(builder: (_) => const DriverLoginScreen()),
@@ -209,6 +241,7 @@ class _DriverAssignedCustomersScreenState
                   profileImageUrl: customer['profile_image'] ?? '',
                   shopImageUrl: customer['shop_image'] ?? '',
                   email: customer['email'] ?? 'N/A',
+                  driverId: widget.driverId,
                 ),
               ),
             );
@@ -273,6 +306,50 @@ class _DriverAssignedCustomersScreenState
 
   @override
   Widget build(BuildContext context) {
+    if (errorMessage != null) {
+      return Scaffold(
+        backgroundColor: Colors.grey[100],
+        body: SafeArea(
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  errorMessage!,
+                  style: const TextStyle(
+                    color: Colors.red,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(context),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF1976D2),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 20, vertical: 12),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                  child: const Text(
+                    'Go Back',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.grey[100],
       body: SafeArea(
